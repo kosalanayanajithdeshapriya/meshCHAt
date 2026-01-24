@@ -1,0 +1,8 @@
+{
+  "name": "Copy of BitChat Cloud",
+  "description": "A high-performance, IRC-style real-time messaging application featuring end-to-end encryption, anonymous authentication, and an integrated Gemini AI assistant.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
