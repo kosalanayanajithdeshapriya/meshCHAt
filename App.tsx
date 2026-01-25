@@ -50,6 +50,8 @@ import { PeerDiscovery } from './components/PeerDiscovery';
 import { ConnectionStatus } from './components/ConnectionStatus';
 import { MobileNav } from './components/MobileNav';
 import { FloatingActionButton } from './components/FloatingActionButton';
+import { LoadingScreen } from './components/LoadingScreen';
+import { SettingsPage } from './components/SettingsPage';
 import { encryptFile, fileToBase64, validateFile, compressImage, formatFileSize } from './utils/fileHandler';
 import { encryptAudio, audioToBase64 } from './utils/audioProcessor';
 import { WebRTCMesh } from './services/webrtcService';
@@ -507,6 +509,7 @@ const Dashboard: React.FC<{ currentUser: User; onLogout: () => void }> = ({ curr
   const isMobile = useIsMobile();
   const isDesktop = useIsDesktop();
   const [mobileTab, setMobileTab] = useState<'messages' | 'channels' | 'connect' | 'settings'>('messages');
+  const [showSettings, setShowSettings] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -865,6 +868,8 @@ const Dashboard: React.FC<{ currentUser: User; onLogout: () => void }> = ({ curr
       setActiveChannelId(id);
     }
     setIsSidebarOpen(false);
+    setShowSettings(false);
+    setMobileTab('messages');
   };
 
   return (
@@ -1190,6 +1195,23 @@ const Dashboard: React.FC<{ currentUser: User; onLogout: () => void }> = ({ curr
         </footer>
       </main>
 
+      {/* Settings Page (Desktop & Mobile) */}
+      {(showSettings || mobileTab === 'settings') && (
+        <div className="fixed inset-0 z-50 md:relative md:flex-1 md:z-auto">
+          <SettingsPage
+            currentUser={currentUser}
+            onLogout={onLogout}
+            onClose={() => {
+              setShowSettings(false);
+              setMobileTab('messages');
+            }}
+            webrtcConnected={webrtcConnected}
+            webrtcPeerCount={webrtcPeerCount}
+            webrtcRoomId={webrtcRoomId}
+          />
+        </div>
+      )}
+
       {/* Media Gallery Modal */}
       {showMediaGallery && (
         <MediaGallery
@@ -1216,8 +1238,22 @@ const Dashboard: React.FC<{ currentUser: User; onLogout: () => void }> = ({ curr
           activeTab={mobileTab}
           onTabChange={(tab) => {
             setMobileTab(tab);
-            if (tab === 'channels') setIsSidebarOpen(true);
-            if (tab === 'connect') setShowPeerDiscovery(true);
+            if (tab === 'channels') {
+              setIsSidebarOpen(true);
+              setShowSettings(false);
+            }
+            if (tab === 'connect') {
+              setShowPeerDiscovery(true);
+              setShowSettings(false);
+            }
+            if (tab === 'settings') {
+              setShowSettings(true);
+              setIsSidebarOpen(false);
+            }
+            if (tab === 'messages') {
+              setShowSettings(false);
+              setIsSidebarOpen(false);
+            }
           }}
           isConnected={webrtcConnected}
         />
@@ -1228,10 +1264,17 @@ const Dashboard: React.FC<{ currentUser: User; onLogout: () => void }> = ({ curr
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const saved = localStorage.getItem('bitchat_user_v2');
-    if (saved) setUser(JSON.parse(saved));
+    // Simulate loading time for smooth UX
+    const timer = setTimeout(() => {
+      const saved = localStorage.getItem('bitchat_user_v2');
+      if (saved) setUser(JSON.parse(saved));
+      setLoading(false);
+    }, 1500); // 1.5 second loading screen
+
+    return () => clearTimeout(timer);
   }, []);
 
   const handleAuth = (u: User) => {
@@ -1247,19 +1290,25 @@ const App: React.FC = () => {
   };
 
   return (
-    <Router>
-      <Routes>
-        <Route
-          path="/"
-          element={
-            user
-              ? <Dashboard currentUser={user} onLogout={handleLogout} />
-              : <AuthScreen onAuth={handleAuth} />
-          }
-        />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </Router>
+    <>
+      {loading ? (
+        <LoadingScreen />
+      ) : (
+        <Router>
+          <Routes>
+            <Route
+              path="/"
+              element={
+                user
+                  ? <Dashboard currentUser={user} onLogout={handleLogout} />
+                  : <AuthScreen onAuth={handleAuth} />
+              }
+            />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Router>
+      )}
+    </>
   );
 };
 
