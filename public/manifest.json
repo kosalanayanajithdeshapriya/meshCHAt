@@ -1,0 +1,38 @@
+{
+    "name": "BitChat - Decentralized Messaging",
+    "short_name": "BitChat",
+    "description": "Peer-to-peer encrypted messaging with no servers. Direct device-to-device communication using WebRTC.",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#020617",
+    "theme_color": "#1e3a8a",
+    "orientation": "portrait-primary",
+    "categories": [
+        "social",
+        "communication",
+        "utilities"
+    ],
+    "icons": [
+        {
+            "src": "/favicon.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any maskable"
+        }
+    ],
+    "screenshots": [],
+    "shortcuts": [
+        {
+            "name": "New Message",
+            "short_name": "Message",
+            "description": "Start a new conversation",
+            "url": "/",
+            "icons": [
+                {
+                    "src": "/favicon.png",
+                    "sizes": "512x512"
+                }
+            ]
+        }
+    ]
+}
