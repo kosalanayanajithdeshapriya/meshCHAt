@@ -75,13 +75,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                             <Radio size={24} className="text-white" />
                         </div>
                         <div>
-                            <h2 className="text-2xl font-black text-white italic">BITCHAT</h2>
+                            <h2 className="text-2xl font-black text-white italic">EncHAT</h2>
                             <p className="text-xs text-slate-500 font-mono">v1.0.0 • Decentralized Mesh Protocol</p>
                         </div>
                     </div>
 
                     <p className="text-slate-300 leading-relaxed mb-4">
-                        BitChat is a <span className="text-blue-400 font-bold">peer-to-peer encrypted messaging platform</span> that operates without central servers.
+                        EncHAT is a <span className="text-blue-400 font-bold">peer-to-peer encrypted messaging platform</span> that operates without central servers.
                         Your messages are transmitted directly between devices using WebRTC technology.
                     </p>
 
@@ -255,7 +255,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
                 {/* Footer */}
                 <div className="text-center text-xs text-slate-600 font-mono py-4">
-                    <p>BitChat • Decentralized Mesh Protocol</p>
+                    <p>EncHAT • Decentralized Mesh Protocol</p>
                     <p className="mt-1">No servers • No tracking • No cloud</p>
                 </div>
             </div>

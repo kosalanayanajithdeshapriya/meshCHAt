@@ -34,13 +34,13 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 
         if (disabled) return;
 
-        const files = Array.from(e.dataTransfer.files);
+        const files = Array.from(e.dataTransfer.files) as File[];
         handleFiles(files);
     };
 
     const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files) {
-            const files = Array.from(e.target.files);
+            const files = Array.from(e.target.files) as File[];
             handleFiles(files);
         }
     };

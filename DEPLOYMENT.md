@@ -1,4 +1,4 @@
-# 🚀 BitChat - Complete Deployment Guide
+# 🚀 EncHAT - Complete Deployment Guide
 
 ## Quick Deploy (5 Minutes)
 
@@ -12,7 +12,7 @@
    - Select the repository containing BitChat
 
 3. **Configure Service**:
-   - **Name**: `bitchat-signaling`
+   - **Name**: `enchat-signaling`
    - **Root Directory**: `signaling-server`
    - **Environment**: `Node`
    - **Build Command**: `npm install`
@@ -53,7 +53,7 @@
 5. **Deploy**:
    - Click "Deploy"
    - Wait ~1 minute
-   - Get your URL: `https://bitchat.vercel.app`
+   - Get your URL: `https://enchat.vercel.app`
 
 #### Option B: Vercel CLI (Advanced)
 
@@ -77,7 +77,7 @@ vercel env add VITE_SIGNALING_SERVER production
 
 ### Step 3: Test Your Deployment
 
-1. **Open your BitChat URL** (e.g., `https://bitchat.vercel.app`)
+1. **Open your EncHAT URL** (e.g., `https://enchat.vercel.app`)
 
 2. **Create Account**:
    - Enter username: "Alice"
@@ -107,8 +107,8 @@ vercel env add VITE_SIGNALING_SERVER production
 **Your BitChat is now live!** Share this with anyone:
 
 ```
-🎉 Try my BitChat app!
-https://bitchat.vercel.app
+🎉 Try my EncHAT app!
+https://enchat.vercel.app
 
 Features:
 ✅ End-to-end encrypted messaging
@@ -211,7 +211,7 @@ Features:
 
 ## 🎉 Congratulations!
 
-You've successfully deployed BitChat to production!
+You've successfully deployed EncHAT to production!
 
 **Your app is now:**
 - 🌍 Accessible globally

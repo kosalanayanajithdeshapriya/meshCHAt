@@ -27,6 +27,7 @@ export class WebRTCMesh {
     private userId: string;
     private messageHandlers: MessageHandler[] = [];
     private connectionHandlers: ConnectionHandler[] = [];
+    private chunkBuffers: Map<string, { chunks: Map<number, string>, totalChunks: number, receivedCount: number }> = new Map();
     private reconnectTimeout: NodeJS.Timeout | null = null;
     private isConnecting: boolean = false;
 
@@ -182,7 +183,7 @@ export class WebRTCMesh {
 
         if (initiator) {
             // Create data channel
-            const dataChannel = pc.createDataChannel('bitchat', {
+            const dataChannel = pc.createDataChannel('enchat', {
                 ordered: false,
                 maxRetransmits: 3
             });
@@ -227,6 +228,71 @@ export class WebRTCMesh {
             }
         };
 
+        dataChannel.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+
+                // Check if this is a chunked message
+                if (data.type === 'CHUNK') {
+                    console.log(`📦 Received chunk ${data.chunkIndex + 1}/${data.totalChunks} for message ${data.messageId}`);
+
+                    // Defensive check
+                    if (!this.chunkBuffers) {
+                        console.error('❌ chunkBuffers is undefined! Reinitializing...');
+                        this.chunkBuffers = new Map();
+                    }
+
+                    // Initialize buffer for this message if it doesn't exist
+                    if (!this.chunkBuffers.has(data.messageId)) {
+                        this.chunkBuffers.set(data.messageId, {
+                            chunks: new Map(),
+                            totalChunks: data.totalChunks,
+                            receivedCount: 0
+                        });
+                    }
+
+                    const buffer = this.chunkBuffers.get(data.messageId)!;
+
+                    // Store this chunk
+                    if (!buffer.chunks.has(data.chunkIndex)) {
+                        buffer.chunks.set(data.chunkIndex, data.data);
+                        buffer.receivedCount++;
+                    }
+
+                    // Check if we have all chunks
+                    if (buffer.receivedCount === buffer.totalChunks) {
+                        console.log(`✅ All chunks received for message ${data.messageId}, reassembling...`);
+
+                        // Reassemble the message
+                        let fullMessage = '';
+                        for (let i = 0; i < buffer.totalChunks; i++) {
+                            fullMessage += buffer.chunks.get(i) || '';
+                        }
+
+                        // Parse and process the complete message
+                        try {
+                            const message = JSON.parse(fullMessage);
+                            this.notifyMessageHandlers(message);
+                        } catch (e) {
+                            console.error('Error parsing reassembled message:', e);
+                        }
+
+                        // Clean up buffer
+                        this.chunkBuffers.delete(data.messageId);
+                    }
+                } else {
+                    // Regular non-chunked message
+                    this.notifyMessageHandlers(data);
+                }
+            } catch (error) {
+                console.error('Error processing data channel message:', error);
+            }
+        };
+
+        dataChannel.onerror = (error) => {
+            console.error(`Data channel error with ${peerId}:`, error);
+        };
+
         dataChannel.onclose = () => {
             console.log(`📡 Data channel closed with ${peerId}`);
             const peer = this.peers.get(peerId);
@@ -234,19 +300,6 @@ export class WebRTCMesh {
                 peer.connected = false;
                 this.notifyConnectionHandlers(peerId, false);
             }
-        };
-
-        dataChannel.onmessage = (event) => {
-            try {
-                const message: WebRTCMessage = JSON.parse(event.data);
-                this.notifyMessageHandlers(message);
-            } catch (error) {
-                console.error('Error parsing message from peer:', error);
-            }
-        };
-
-        dataChannel.onerror = (error) => {
-            console.error(`Data channel error with ${peerId}:`, error);
         };
     }
 
@@ -294,7 +347,9 @@ export class WebRTCMesh {
         }
     }
 
-    // Send message to all connected peers
+    /**
+     * Broadcast a message to all connected peers
+     */
     broadcast(message: Omit<WebRTCMessage, 'timestamp' | 'senderId'>): void {
         const fullMessage: WebRTCMessage = {
             ...message,
@@ -303,15 +358,45 @@ export class WebRTCMesh {
         };
 
         const messageStr = JSON.stringify(fullMessage);
+        const MAX_CHUNK_SIZE = 64000; // 64KB chunks for safety (WebRTC limit is ~256KB but varies)
+
         let sentCount = 0;
 
         this.peers.forEach((peer, peerId) => {
             if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
                 try {
-                    peer.dataChannel.send(messageStr);
-                    sentCount++;
+                    // If message is small enough, send directly
+                    if (messageStr.length <= MAX_CHUNK_SIZE) {
+                        peer.dataChannel.send(messageStr);
+                        sentCount++;
+                    } else {
+                        // Split large messages into chunks
+                        console.log(`📦 Chunking large message (${Math.round(messageStr.length / 1024)}KB) for peer ${peerId}`);
+
+                        const chunks = Math.ceil(messageStr.length / MAX_CHUNK_SIZE);
+                        const messageId = Math.random().toString(36).substr(2, 12);
+
+                        for (let i = 0; i < chunks; i++) {
+                            const start = i * MAX_CHUNK_SIZE;
+                            const end = Math.min(start + MAX_CHUNK_SIZE, messageStr.length);
+                            const chunk = messageStr.substring(start, end);
+
+                            const chunkMessage = {
+                                type: 'CHUNK',
+                                messageId,
+                                chunkIndex: i,
+                                totalChunks: chunks,
+                                data: chunk
+                            };
+
+                            peer.dataChannel.send(JSON.stringify(chunkMessage));
+                        }
+
+                        sentCount++;
+                        console.log(`✅ Sent ${chunks} chunks to peer ${peerId}`);
+                    }
                 } catch (error) {
-                    console.error(`Error sending to peer ${peerId}:`, error);
+                    console.error(`❌ Error sending to peer ${peerId}:`, error);
                 }
             }
         });

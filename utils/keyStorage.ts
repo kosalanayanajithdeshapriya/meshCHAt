@@ -1,10 +1,10 @@
 
 /**
- * Secure key storage using IndexedDB for BitChat encryption keys.
+ * Secure key storage using IndexedDB for EncHAT encryption keys.
  * Stores CryptoKey objects securely in the browser's IndexedDB.
  */
 
-const DB_NAME = 'bitchat_keystore';
+const DB_NAME = 'enchat_keystore';
 const DB_VERSION = 1;
 const STORE_NAME = 'encryption_keys';
 

@@ -21,7 +21,7 @@ export const LoadingScreen: React.FC = () => {
 
                 {/* App name */}
                 <div className="flex flex-col items-center gap-2">
-                    <h1 className="text-5xl font-black text-white tracking-tighter italic">BITCHAT</h1>
+                    <h1 className="text-5xl font-black text-white tracking-tighter italic">EncHAT</h1>
                     <p className="text-slate-500 font-mono text-xs uppercase tracking-[0.3em]">Decentralized Mesh Protocol</p>
                 </div>
 

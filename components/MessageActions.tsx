@@ -1,160 +1,166 @@
-
-import React, { useState } from 'react';
-import { Reply, Edit2, Trash2, Copy, Pin, MoreVertical, Check, X } from 'lucide-react';
-import { Message } from '../types';
+import React, { useState, useRef, useEffect } from 'react';
+import {
+    Reply,
+    Smile,
+    Trash2,
+    Copy,
+    Forward,
+    MoreVertical,
+    Info,
+    Edit2
+} from 'lucide-react';
+import { Message, User } from '../types';
 
 interface MessageActionsProps {
     message: Message;
-    currentUserId: string;
-    onReply: (messageId: string) => void;
-    onEdit: (messageId: string, newText: string) => void;
-    onDelete: (messageId: string) => void;
-    onPin: (messageId: string) => void;
+    currentUser: User;
+    onReply: (message: Message) => void;
+    onReact: (message: Message, emoji: string) => void;
+    onDelete: (message: Message, forEveryone: boolean) => void;
+    onForward: (message: Message) => void;
     onCopy: (text: string) => void;
+    onInfo?: (message: Message) => void;
 }
 
 export const MessageActions: React.FC<MessageActionsProps> = ({
     message,
-    currentUserId,
+    currentUser,
     onReply,
-    onEdit,
+    onReact,
     onDelete,
-    onPin,
-    onCopy
+    onForward,
+    onCopy,
+    onInfo
 }) => {
-    const [showMenu, setShowMenu] = useState(false);
-    const [isEditing, setIsEditing] = useState(false);
-    const [editText, setEditText] = useState(message.text);
+    const [isOpen, setIsOpen] = useState(false);
+    const [showDeleteSubmenu, setShowDeleteSubmenu] = useState(false);
+    const menuRef = useRef<HTMLDivElement>(null);
+    const isMe = message.senderId === currentUser.uid;
+    const canDeleteForEveryone = isMe && (Date.now() - message.timestamp < 15 * 60 * 1000); // 15 mins
 
-    const isOwnMessage = message.senderId === currentUserId;
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+                setIsOpen(false);
+                setShowDeleteSubmenu(false);
+            }
+        };
 
-    const handleEdit = () => {
-        if (editText.trim() && editText !== message.text) {
-            onEdit(message.id, editText);
+        if (isOpen) {
+            document.addEventListener('mousedown', handleClickOutside);
         }
-        setIsEditing(false);
-        setShowMenu(false);
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, [isOpen]);
+
+    const handleAction = (action: () => void) => {
+        action();
+        setIsOpen(false);
+        setShowDeleteSubmenu(false);
     };
 
-    const handleDelete = () => {
-        if (confirm('Delete this message?')) {
-            onDelete(message.id);
-            setShowMenu(false);
-        }
-    };
-
-    if (isEditing) {
-        return (
-            <div className="flex items-center gap-2 mt-2">
-                <input
-                    type="text"
-                    value={editText}
-                    onChange={(e) => setEditText(e.target.value)}
-                    className="flex-1 bg-slate-800 border border-slate-700 text-white px-3 py-2 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    autoFocus
-                    onKeyDown={(e) => {
-                        if (e.key === 'Enter') handleEdit();
-                        if (e.key === 'Escape') setIsEditing(false);
-                    }}
-                />
-                <button
-                    onClick={handleEdit}
-                    className="p-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white transition-colors"
-                >
-                    <Check size={16} />
-                </button>
-                <button
-                    onClick={() => {
-                        setIsEditing(false);
-                        setEditText(message.text);
-                    }}
-                    className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white transition-colors"
-                >
-                    <X size={16} />
-                </button>
-            </div>
-        );
-    }
+    const commonEmojis = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
     return (
-        <div className="relative">
+        <div className="relative group/actions" ref={menuRef}>
             <button
-                onClick={() => setShowMenu(!showMenu)}
-                className="p-1.5 opacity-0 group-hover:opacity-100 hover:bg-slate-700/50 rounded-lg text-slate-400 transition-all"
+                onClick={() => setIsOpen(!isOpen)}
+                className={`
+          p-1 rounded-full hover:bg-slate-800 transition-colors opacity-0 group-hover:opacity-100
+          ${isOpen ? 'opacity-100 bg-slate-800' : ''}
+          ${isMe ? 'text-slate-300' : 'text-slate-400'}
+        `}
             >
                 <MoreVertical size={16} />
             </button>
 
-            {showMenu && (
-                <>
-                    {/* Backdrop */}
-                    <div
-                        className="fixed inset-0 z-40"
-                        onClick={() => setShowMenu(false)}
-                    />
-
-                    {/* Menu */}
-                    <div className="absolute right-0 top-8 z-50 bg-slate-800 border border-slate-700 rounded-xl shadow-xl py-2 min-w-[180px]">
-                        <button
-                            onClick={() => {
-                                onReply(message.id);
-                                setShowMenu(false);
-                            }}
-                            className="w-full flex items-center gap-3 px-4 py-2 hover:bg-slate-700 text-slate-200 text-sm transition-colors"
-                        >
-                            <Reply size={16} />
-                            <span>Reply</span>
-                        </button>
-
-                        {isOwnMessage && (
+            {isOpen && (
+                <div className={`
+          absolute z-50 w-48 bg-slate-800 rounded-xl shadow-2xl border border-slate-700 py-1
+          ${isMe ? 'right-0 origin-top-right' : 'left-0 origin-top-left'}
+          top-full mt-1
+        `}>
+                    {/* Quick Reactions */}
+                    <div className="px-2 py-2 mb-1 flex justify-between border-b border-slate-700">
+                        {commonEmojis.map(emoji => (
                             <button
-                                onClick={() => {
-                                    setIsEditing(true);
-                                    setShowMenu(false);
-                                }}
-                                className="w-full flex items-center gap-3 px-4 py-2 hover:bg-slate-700 text-slate-200 text-sm transition-colors"
+                                key={emoji}
+                                onClick={() => handleAction(() => onReact(message, emoji))}
+                                className="hover:scale-125 transition-transform text-lg"
                             >
-                                <Edit2 size={16} />
-                                <span>Edit</span>
+                                {emoji}
                             </button>
-                        )}
+                        ))}
+                    </div>
 
+                    <button
+                        onClick={() => handleAction(() => onReply(message))}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-slate-200 hover:bg-slate-700/50 transition-colors text-sm"
+                    >
+                        <Reply size={16} />
+                        <span>Reply</span>
+                    </button>
+
+                    <button
+                        onClick={() => handleAction(() => onCopy(message.text))}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-slate-200 hover:bg-slate-700/50 transition-colors text-sm"
+                    >
+                        <Copy size={16} />
+                        <span>Copy</span>
+                    </button>
+
+                    <button
+                        onClick={() => handleAction(() => onForward(message))}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-slate-200 hover:bg-slate-700/50 transition-colors text-sm"
+                    >
+                        <Forward size={16} />
+                        <span>Forward</span>
+                    </button>
+
+                    {isMe && onInfo && (
                         <button
-                            onClick={() => {
-                                onCopy(message.text);
-                                setShowMenu(false);
-                            }}
-                            className="w-full flex items-center gap-3 px-4 py-2 hover:bg-slate-700 text-slate-200 text-sm transition-colors"
+                            onClick={() => handleAction(() => onInfo(message))}
+                            className="w-full flex items-center gap-3 px-4 py-2.5 text-slate-200 hover:bg-slate-700/50 transition-colors text-sm"
                         >
-                            <Copy size={16} />
-                            <span>Copy Text</span>
+                            <Info size={16} />
+                            <span>Info</span>
+                        </button>
+                    )}
+
+                    <div className="h-px bg-slate-700/50 my-1"></div>
+
+                    <div className="relative">
+                        <button
+                            onClick={() => setShowDeleteSubmenu(!showDeleteSubmenu)}
+                            className="w-full flex items-center justify-between px-4 py-2.5 text-red-400 hover:bg-red-500/10 transition-colors text-sm"
+                        >
+                            <div className="flex items-center gap-3">
+                                <Trash2 size={16} />
+                                <span>Delete</span>
+                            </div>
                         </button>
 
-                        <button
-                            onClick={() => {
-                                onPin(message.id);
-                                setShowMenu(false);
-                            }}
-                            className="w-full flex items-center gap-3 px-4 py-2 hover:bg-slate-700 text-slate-200 text-sm transition-colors"
-                        >
-                            <Pin size={16} />
-                            <span>{message.isPinned ? 'Unpin' : 'Pin'} Message</span>
-                        </button>
-
-                        {isOwnMessage && (
-                            <>
-                                <div className="h-px bg-slate-700 my-2" />
+                        {showDeleteSubmenu && (
+                            <div className="absolute left-full top-0 ml-1 w-40 bg-slate-800 rounded-xl shadow-2xl border border-slate-700 py-1 overflow-hidden">
                                 <button
-                                    onClick={handleDelete}
-                                    className="w-full flex items-center gap-3 px-4 py-2 hover:bg-red-500/10 text-red-400 text-sm transition-colors"
+                                    onClick={() => handleAction(() => onDelete(message, false))}
+                                    className="w-full text-left px-4 py-2.5 text-slate-200 hover:bg-slate-700/50 transition-colors text-sm"
                                 >
-                                    <Trash2 size={16} />
-                                    <span>Delete</span>
+                                    Delete for me
                                 </button>
-                            </>
+                                {canDeleteForEveryone && (
+                                    <button
+                                        onClick={() => handleAction(() => onDelete(message, true))}
+                                        className="w-full text-left px-4 py-2.5 text-red-400 hover:bg-red-500/10 transition-colors text-sm"
+                                    >
+                                        Delete for everyone
+                                    </button>
+                                )}
+                            </div>
                         )}
                     </div>
-                </>
+                </div>
             )}
         </div>
     );

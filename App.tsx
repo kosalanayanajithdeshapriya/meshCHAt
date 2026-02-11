@@ -32,9 +32,10 @@ import {
   Paperclip,
   Image as ImageIcon,
   Mic,
-  Camera
+  Camera,
+  Smile
 } from 'lucide-react';
-import { z } from 'https://esm.sh/zod';
+import { z } from 'zod';
 
 import { User, Channel, Message, FileAttachment } from './types';
 import { getGeminiResponse } from './services/geminiService';
@@ -56,19 +57,32 @@ import { encryptFile, fileToBase64, validateFile, compressImage, formatFileSize 
 import { encryptAudio, audioToBase64 } from './utils/audioProcessor';
 import { WebRTCMesh } from './services/webrtcService';
 import { useIsMobile, useIsDesktop } from './hooks/useMediaQuery';
+import { Transmission } from './components/Transmission';
+import { EmojiPicker } from './components/EmojiPicker';
+import { ReplyPreview } from './components/ReplyPreview';
+import { MessageStatus, ReplyInfo } from './types';
+import { formatSmartTime, groupMessages } from './utils/messageHelpers';
 
 // --- SCHEMA VALIDATION ---
+// Updated to allow empty text when attachments are present
 const messageSchema = z.object({
-  text: z.string().min(1, "Empty transmission").max(5000, "Packet overflow"),
+  text: z.string().max(5000, "Packet overflow"),
   senderId: z.string(),
   senderName: z.string(),
   channelId: z.string(),
-});
+  attachments: z.array(z.any()).optional(),
+}).refine(
+  (data) => data.text.trim().length > 0 || (data.attachments && data.attachments.length > 0),
+  {
+    message: "Message must have either text or attachments",
+    path: ["text"],
+  }
+);
 
 // --- PERSISTENT LOCAL MESH DB ---
 // Simulates a decentralized mesh network using BroadcastChannel and LocalStorage
 class MeshNode {
-  private bc = new BroadcastChannel('bitchat_mesh_sync');
+  private bc = new BroadcastChannel('enchat_mesh_sync');
   private listeners: Map<string, ((data: any) => void)[]> = new Map();
   private webrtc: WebRTCMesh | null = null; // WebRTC for cross-device P2P
   private webrtcRoomId: string | null = null;
@@ -80,7 +94,7 @@ class MeshNode {
         this.triggerListeners(path, data);
       } else if (type === 'PING') {
         // Heartbeat response
-        this.bc.postMessage({ type: 'PONG', uid: localStorage.getItem('bitchat_uid') });
+        this.bc.postMessage({ type: 'PONG', uid: localStorage.getItem('enchat_uid') });
       } else if (type === 'PRESENCE') {
         // User presence update
         this.triggerListeners('presence', event.data);
@@ -132,6 +146,7 @@ class MeshNode {
     try {
       messageSchema.parse({ ...msgData, channelId: cid });
     } catch (e) {
+      console.error('❌ Message validation failed:', e);
       return null;
     }
 
@@ -143,16 +158,27 @@ class MeshNode {
       channelId: cid
     };
 
+    console.log('💾 Saving message to localStorage:', {
+      id: fullMsg.id,
+      hasAttachments: !!(fullMsg.attachments && fullMsg.attachments.length > 0),
+      attachmentCount: fullMsg.attachments?.length,
+      messageType: fullMsg.messageType
+    });
+
     if (!allMsgs[cid]) allMsgs[cid] = [];
 
     // Deduplication check
-    if (allMsgs[cid].find((m: Message) => m.messageHash === fullMsg.messageHash)) return null;
+    if (allMsgs[cid].find((m: Message) => m.messageHash === fullMsg.messageHash)) {
+      console.warn('⚠️ Duplicate message detected, skipping');
+      return null;
+    }
 
     allMsgs[cid].push(fullMsg);
     // Mesh optimization: trim old packets
     if (allMsgs[cid].length > 200) allMsgs[cid] = allMsgs[cid].slice(-200);
 
     localStorage.setItem('bc_messages', JSON.stringify(allMsgs));
+    console.log('✅ Message saved to localStorage');
 
     // Broadcast locally via BroadcastChannel
     this.bc.postMessage({ type: 'SYNC_PACKET', path: `messages/${cid}`, data: allMsgs[cid] });
@@ -168,6 +194,30 @@ class MeshNode {
     }
 
     return fullMsg;
+  }
+
+  async updateMessage(cid: string, msgId: string, updates: Partial<Message>) {
+    const allMsgs = JSON.parse(localStorage.getItem('bc_messages') || '{}');
+    if (!allMsgs[cid]) return;
+
+    const idx = allMsgs[cid].findIndex((m: Message) => m.id === msgId);
+    if (idx === -1) return;
+
+    allMsgs[cid][idx] = { ...allMsgs[cid][idx], ...updates };
+    localStorage.setItem('bc_messages', JSON.stringify(allMsgs));
+
+    // Broadcast update
+    this.bc.postMessage({ type: 'SYNC_PACKET', path: `messages/${cid}`, data: allMsgs[cid] });
+    this.triggerListeners(`messages/${cid}`, allMsgs[cid]);
+
+    // WebRTC update - send full list sync
+    if (this.webrtc && this.webrtc.isConnected()) {
+      this.webrtc.broadcast({
+        type: 'MESSAGE',
+        channelId: cid,
+        data: allMsgs[cid]
+      });
+    }
   }
 
   async createSegment(name: string, isPrivate = false) {
@@ -223,18 +273,79 @@ class MeshNode {
 
     // Handle incoming WebRTC messages
     this.webrtc.onMessage((message) => {
-      if (message.type === 'MESSAGE') {
-        // Trigger local listeners as if it came from BroadcastChannel
-        this.triggerListeners(`messages/${message.channelId}`, message.data);
-      } else if (message.type === 'PRESENCE') {
-        this.triggerListeners('presence', message.data);
-      } else if (message.type === 'TYPING') {
-        this.triggerListeners('typing', {
-          type: 'TYPING',
-          channelId: message.channelId,
-          ...message.data,
-          timestamp: message.timestamp
-        });
+      try {
+        if (message.type === 'MESSAGE') {
+          // CRITICAL FIX: Merge received messages into localStorage
+          const channelId = message.channelId;
+
+          // Safety check: ensure channelId exists
+          if (!channelId) {
+            console.warn('Received message without channelId:', message);
+            return;
+          }
+
+          let allMsgs: any = {};
+          try {
+            allMsgs = JSON.parse(localStorage.getItem('bc_messages') || '{}');
+          } catch (e) {
+            console.error('Failed to parse bc_messages from localStorage, resetting:', e);
+            allMsgs = {};
+          }
+
+          if (!allMsgs[channelId]) {
+            allMsgs[channelId] = [];
+          }
+
+          // Merge incoming messages with existing ones (deduplicate by messageHash)
+          const incomingMessages = Array.isArray(message.data) ? message.data : [message.data];
+
+          incomingMessages.forEach((incomingMsg: any) => {
+            // Safety check: ensure message has required fields
+            if (!incomingMsg || !incomingMsg.timestamp) {
+              console.warn('Skipping malformed message:', incomingMsg);
+              return;
+            }
+
+            // Check if message already exists (by messageHash or id)
+            const exists = allMsgs[channelId].find((m: any) =>
+              (m.messageHash && incomingMsg.messageHash && m.messageHash === incomingMsg.messageHash) ||
+              (m.id && incomingMsg.id && m.id === incomingMsg.id)
+            );
+
+            if (!exists) {
+              allMsgs[channelId].push(incomingMsg);
+            }
+          });
+
+          // Sort by timestamp to maintain chronological order
+          allMsgs[channelId].sort((a: any, b: any) => (a.timestamp || 0) - (b.timestamp || 0));
+
+          // Trim to last 200 messages
+          if (allMsgs[channelId].length > 200) {
+            allMsgs[channelId] = allMsgs[channelId].slice(-200);
+          }
+
+          // Save to localStorage
+          try {
+            localStorage.setItem('bc_messages', JSON.stringify(allMsgs));
+          } catch (e) {
+            console.error('Failed to save messages to localStorage:', e);
+          }
+
+          // Trigger local listeners to update UI
+          this.triggerListeners(`messages/${channelId}`, allMsgs[channelId]);
+        } else if (message.type === 'PRESENCE') {
+          this.triggerListeners('presence', message.data);
+        } else if (message.type === 'TYPING') {
+          this.triggerListeners('typing', {
+            type: 'TYPING',
+            channelId: message.channelId,
+            ...message.data,
+            timestamp: message.timestamp
+          });
+        }
+      } catch (error) {
+        console.error('Error handling WebRTC message:', error, message);
       }
     });
 
@@ -244,7 +355,7 @@ class MeshNode {
   async connectToRoom(roomId: string): Promise<void> {
     if (!this.webrtc) {
       // Auto-initialize if not already done
-      const userId = localStorage.getItem('bitchat_uid') || 'unknown';
+      const userId = localStorage.getItem('enchat_uid') || 'unknown';
       const peerId = Math.random().toString(36).substr(2, 12);
       this.initializeWebRTC(userId, peerId);
     }
@@ -313,7 +424,7 @@ const AuthScreen: React.FC<{ onAuth: (user: User) => void }> = ({ onAuth }) => {
         isOnline: true,
         lastSeen: Date.now()
       };
-      localStorage.setItem('bitchat_uid', uid);
+      localStorage.setItem('enchat_uid', uid);
       onAuth(user);
     }, 1200);
   };
@@ -328,7 +439,7 @@ const AuthScreen: React.FC<{ onAuth: (user: User) => void }> = ({ onAuth }) => {
             <Radio size={40} />
           </div>
 
-          <h1 className="text-4xl font-black text-white tracking-tighter mb-2 italic">BITCHAT</h1>
+          <h1 className="text-4xl font-black text-white tracking-tighter mb-2 italic">EncHAT</h1>
           <p className="text-slate-500 font-mono text-[10px] uppercase tracking-[0.3em] mb-10">Local Mesh Protocol v1.0</p>
 
           <form className="w-full space-y-6" onSubmit={handleAuth}>
@@ -372,116 +483,7 @@ const AuthScreen: React.FC<{ onAuth: (user: User) => void }> = ({ onAuth }) => {
 };
 
 // Moved Transmission up to fix hoisting issues (used in Dashboard)
-const Transmission: React.FC<{ m: Message; currentUser: User; secret?: string }> = ({ m, currentUser, secret }) => {
-  const isMe = m.senderId === currentUser.uid;
-  const isAI = m.senderId === 'gemini-ai';
-  const isSystem = m.senderId === 'system';
-  const [content, setContent] = useState<string>(m.text);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (m.text.startsWith(ENCRYPTION_PREFIX)) {
-      if (secret) {
-        setLoading(true);
-        decryptMessage(m.text, secret, m.channelId).then(res => {
-          setContent(res);
-          setLoading(false);
-        });
-      } else {
-        setContent('[🔒 PACKET_ENCRYPTED_MISSING_KEY]');
-      }
-    } else {
-      setContent(m.text);
-    }
-  }, [m.text, secret]);
-
-  if (isSystem) {
-    return (
-      <div className="flex justify-center my-8">
-        <div className="bg-slate-900/60 px-6 py-2 rounded-full border border-slate-800 flex items-center gap-3">
-          <Terminal size={14} className="text-blue-500" />
-          <span className="text-[10px] font-mono text-slate-500 tracking-[0.2em] uppercase">{content}</span>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className={`flex items-start gap-5 mb-10 ${isMe ? 'flex-row-reverse' : 'flex-row'}`}>
-      <div className="flex-shrink-0">
-        {isAI ? (
-          <div className="w-12 h-12 bg-blue-600/10 rounded-2xl flex items-center justify-center text-blue-500 border border-blue-500/30">
-            <Cpu size={24} />
-          </div>
-        ) : (
-          <img
-            src={`https://api.dicebear.com/7.x/pixel-art/svg?seed=${m.senderId}`}
-            className={`w-12 h-12 rounded-2xl bg-slate-800 border border-slate-800 shadow-xl ${isMe ? 'grayscale-0' : 'grayscale'}`}
-            alt="U"
-          />
-        )}
-      </div>
-
-      <div className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} max-w-[85%]`}>
-        <div className={`flex items-center gap-3 mb-2 px-1 ${isMe ? 'flex-row-reverse' : ''}`}>
-          <span className={`text-[11px] font-black uppercase tracking-widest ${isAI ? 'text-blue-400' : 'text-slate-400'}`}>
-            {m.senderName}
-          </span>
-          <span className="text-[9px] font-mono text-slate-600">
-            {new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-          </span>
-        </div>
-
-        <div className={`
-          px-6 py-4 rounded-[2rem] text-base leading-relaxed border transition-all relative group
-          ${isMe ? 'bg-blue-600 border-blue-500 text-white rounded-tr-none'
-            : isAI ? 'bg-slate-900 border-blue-500/30 text-slate-100 rounded-tl-none ring-1 ring-blue-500/10'
-              : 'bg-slate-800/80 border-slate-700/50 text-slate-100 rounded-tl-none backdrop-blur-md'}
-          ${loading ? 'animate-pulse' : ''}
-        `}>
-          {/* Text content */}
-          {content && <div className="whitespace-pre-wrap font-medium">{content}</div>}
-
-          {/* File attachments */}
-          {m.attachments && m.attachments.length > 0 && (
-            <div className={`${content ? 'mt-4' : ''} space-y-3`}>
-              {m.attachments.map((attachment) => {
-                // Check if it's a voice message
-                if (m.messageType === 'voice' || attachment.type.startsWith('audio/')) {
-                  return (
-                    <AudioPlayer
-                      key={attachment.id}
-                      audioUrl={attachment.url}
-                      encrypted={attachment.encrypted}
-                      secret={secret}
-                      channelId={m.channelId}
-                    />
-                  );
-                }
-                // Other file types
-                return (
-                  <FileMessage
-                    key={attachment.id}
-                    attachment={attachment}
-                    secret={secret}
-                    channelId={m.channelId}
-                  />
-                );
-              })}
-            </div>
-          )}
-
-          {m.text.startsWith(ENCRYPTION_PREFIX) && (
-            <div className="mt-4 pt-3 border-t border-white/10 flex items-center gap-2 text-[9px] font-black uppercase tracking-[0.2em] opacity-40 group-hover:opacity-100 transition-opacity">
-              <Shield size={12} className="text-green-400" />
-              <span>Mesh Secure Channel</span>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-};
+// Transmission component moved to components/Transmission.tsx
 
 const Dashboard: React.FC<{ currentUser: User; onLogout: () => void }> = ({ currentUser, onLogout }) => {
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -504,6 +506,11 @@ const Dashboard: React.FC<{ currentUser: User; onLogout: () => void }> = ({ curr
   const [webrtcConnected, setWebrtcConnected] = useState(false);
   const [webrtcPeerCount, setWebrtcPeerCount] = useState(0);
   const [webrtcRoomId, setWebrtcRoomId] = useState<string | null>(null);
+
+  // New state for WhatsApp features
+  const [replyingTo, setReplyingTo] = useState<ReplyInfo | undefined>(undefined);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [messageText, setMessageText] = useState('');
 
   // Mobile responsive
   const isMobile = useIsMobile();
@@ -639,17 +646,26 @@ const Dashboard: React.FC<{ currentUser: User; onLogout: () => void }> = ({ curr
     [channels, activeChannelId]);
 
   const handleDispatch = async (text: string, files?: File[]) => {
+    console.log('📤 handleDispatch called:', { text, filesCount: files?.length });
+
     if (text.startsWith('/')) {
       handleProtocolCommand(text);
       return;
     }
 
+    // Ensure we have either text or files
+    if (!text.trim() && (!files || files.length === 0)) {
+      console.warn('⚠️ Nothing to send - no text or files');
+      return;
+    }
+
     const currentSecret = sessionKeys[activeChannelId];
-    let finalContent = text;
+    let finalContent = text.trim();
     let attachments: FileAttachment[] | undefined;
 
     // Handle file attachments
     if (files && files.length > 0) {
+      console.log('📎 Processing files:', files.map(f => ({ name: f.name, type: f.type, size: f.size })));
       attachments = [];
       for (const file of files) {
         try {
@@ -694,7 +710,6 @@ const Dashboard: React.FC<{ currentUser: User; onLogout: () => void }> = ({ curr
           console.error('File processing failed', e);
           const errorMsg = e instanceof Error ? e.message : 'Unknown error';
           alert(`❌ Failed to process ${file.name}: ${errorMsg}\n\nTry a smaller file or different format.`);
-          // Continue processing other files
         }
       }
     }
@@ -711,22 +726,94 @@ const Dashboard: React.FC<{ currentUser: User; onLogout: () => void }> = ({ curr
     }
 
     const hash = await generateHash((text || 'file') + Date.now() + currentUser.uid);
+    console.log('✅ Broadcasting message:', {
+      finalContent: finalContent || '[file only]',
+      attachmentsCount: attachments?.length,
+      messageType: attachments && attachments.length > 0 ? 'file' : 'text'
+    });
     await mesh.broadcast(activeChannelId, {
       senderId: currentUser.uid,
       senderName: currentUser.displayName,
       text: finalContent || '',
       messageHash: hash,
       attachments,
-      messageType: attachments && attachments.length > 0 ? 'file' : 'text'
+      messageType: attachments && attachments.length > 0 ? 'file' : 'text',
+      status: 'sent',
+      replyTo: replyingTo
     });
 
-    // Clear file selection
+    // Reset states
     setSelectedFiles([]);
     setShowFileUpload(false);
+    setReplyingTo(undefined);
+    setMessageText('');
+    setShowEmojiPicker(false);
 
     if (text.toLowerCase().includes('@gemini')) {
       processMeshAI(text);
     }
+  };
+
+  const handleReply = (msg: Message) => {
+    const rawText = msg.text.startsWith(ENCRYPTION_PREFIX) ? '[Encrypted Message]' : msg.text; // Simplification, ideally we pass decrypted
+    setReplyingTo({
+      id: msg.id,
+      senderName: msg.senderName,
+      text: rawText,
+      hasAttachment: !!(msg.attachments && msg.attachments.length > 0),
+      attachmentType: msg.attachments?.[0]?.type,
+      thumbnail: msg.attachments?.[0]?.type.startsWith('image') ? msg.attachments[0].url : undefined
+    });
+    inputRef.current?.focus();
+  };
+
+  const handleReact = (msg: Message, emoji: string) => {
+    const currentReactions = msg.reactions || [];
+    const existingReaction = currentReactions.find(r => r.emoji === emoji);
+    let newReactions = [...currentReactions];
+
+    if (existingReaction) {
+      if (existingReaction.users.includes(currentUser.uid)) {
+        // Already reacted, remove it (toggle)
+        existingReaction.users = existingReaction.users.filter(u => u !== currentUser.uid);
+        if (existingReaction.users.length === 0) {
+          newReactions = newReactions.filter(r => r.emoji !== emoji);
+        }
+      } else {
+        existingReaction.users.push(currentUser.uid);
+      }
+    } else {
+      newReactions.push({ emoji, users: [currentUser.uid] });
+    }
+    mesh.updateMessage(msg.channelId, msg.id, { reactions: newReactions });
+  };
+
+  const handleRemoveReaction = (msg: Message, emoji: string) => {
+    handleReact(msg, emoji);
+  };
+
+  const handleDelete = (msg: Message, forEveryone: boolean) => {
+    if (forEveryone) {
+      mesh.updateMessage(msg.channelId, msg.id, {
+        text: '🚫 This message was deleted',
+        attachments: [],
+        messageType: 'system' // Change to system type so it renders differently
+      });
+    } else {
+      const deletedFor = msg.deletedFor || [];
+      if (!deletedFor.includes(currentUser.uid)) {
+        deletedFor.push(currentUser.uid);
+        mesh.updateMessage(msg.channelId, msg.id, { deletedFor });
+      }
+    }
+  };
+
+  const handleForward = (msg: Message) => {
+    setMessageText(`Forwarded: ${msg.text}`);
+  };
+
+  const handleCopy = (text: string) => {
+    navigator.clipboard.writeText(text);
   };
 
   const handleVoiceMessage = async (audioBlob: Blob, duration: number, waveform: number[]) => {
@@ -757,18 +844,18 @@ const Dashboard: React.FC<{ currentUser: User; onLogout: () => void }> = ({ curr
       text: '',
       messageHash: hash,
       attachments: [attachment],
-      messageType: 'voice'
+      messageType: 'voice',
+      status: 'sent'
     });
 
     setShowVoiceRecorder(false);
   };
 
   const handleCameraCapture = async (file: File, type: 'image' | 'video') => {
-    setShowCameraCapture(false);
-
-    // Add the captured file to selected files and send
+    console.log('📷 Camera captured:', { name: file.name, type, size: file.size });
     const files = [file];
-    handleDispatch('', files);
+    await handleDispatch('', files);
+    setShowCameraCapture(false);
   };
 
   // WebRTC handlers
@@ -888,7 +975,7 @@ const Dashboard: React.FC<{ currentUser: User; onLogout: () => void }> = ({ curr
             <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-white shadow-lg">
               <Radio size={22} />
             </div>
-            <h1 className="text-xl font-black italic tracking-tighter text-white">BITCHAT</h1>
+            <h1 className="text-xl font-black italic tracking-tighter text-white">EncHAT</h1>
           </div>
           <button className="md:hidden p-2 text-slate-500" onClick={() => setIsSidebarOpen(false)}>
             <X size={20} />
@@ -932,11 +1019,11 @@ const Dashboard: React.FC<{ currentUser: User; onLogout: () => void }> = ({ curr
           <div>
             <h2 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.4em] mb-4 px-2">Protocol Controls</h2>
             <div className="space-y-1">
-              <button className="w-full flex items-center gap-4 px-4 py-3 rounded-2xl text-sm font-bold text-slate-500 hover:bg-slate-800/50 hover:text-slate-200 transition-all">
+              <button onClick={() => setShowPeerDiscovery(true)} className="w-full flex items-center gap-4 px-4 py-3 rounded-2xl text-sm font-bold text-slate-500 hover:bg-slate-800/50 hover:text-slate-200 transition-all">
                 <Users size={18} />
                 <span>Node Discovery</span>
               </button>
-              <button className="w-full flex items-center gap-4 px-4 py-3 rounded-2xl text-sm font-bold text-slate-500 hover:bg-slate-800/50 hover:text-slate-200 transition-all">
+              <button onClick={() => setShowSettings(true)} className="w-full flex items-center gap-4 px-4 py-3 rounded-2xl text-sm font-bold text-slate-500 hover:bg-slate-800/50 hover:text-slate-200 transition-all">
                 <Shield size={18} />
                 <span>Security Console</span>
               </button>
@@ -1010,7 +1097,7 @@ const Dashboard: React.FC<{ currentUser: User; onLogout: () => void }> = ({ curr
           </div>
         </header>
 
-        <section ref={scrollRef} className="flex-1 overflow-y-auto p-4 md:p-8 space-y-2 pb-20 md:pb-8">
+        <section ref={scrollRef} className="flex-1 overflow-y-auto p-4 md:p-8 space-y-2 pb-20 md:pb-8 relative">
           <div className="max-w-4xl mx-auto py-10">
             {messages.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-[60vh] text-center space-y-6 opacity-20">
@@ -1023,15 +1110,34 @@ const Dashboard: React.FC<{ currentUser: User; onLogout: () => void }> = ({ curr
                 </div>
               </div>
             ) : (
-              messages.map(m => (
-                <Transmission
-                  key={m.id}
-                  m={m}
-                  currentUser={currentUser}
-                  secret={sessionKeys[activeChannelId]}
-                />
+              groupMessages(messages).map((group, groupIndex) => (
+                <div key={groupIndex} className="mb-2">
+                  {group.map((m, index) => {
+                    // Check if message is deleted for current user
+                    if (m.deletedFor?.includes(currentUser.uid)) {
+                      return null;
+                    }
+
+                    return (
+                      <Transmission
+                        key={m.id}
+                        m={m}
+                        currentUser={currentUser}
+                        secret={sessionKeys[activeChannelId]}
+                        previousMessage={index > 0 ? group[index - 1] : undefined}
+                        onReply={handleReply}
+                        onReact={handleReact}
+                        onRemoveReaction={handleRemoveReaction}
+                        onDelete={handleDelete}
+                        onForward={handleForward}
+                        onCopy={handleCopy}
+                      />
+                    );
+                  })}
+                </div>
               ))
             )}
+
             {isTyping && (
               <div className="flex items-center gap-3 text-blue-500/50 font-mono text-[10px] uppercase tracking-widest mt-4">
                 <Zap size={12} className="animate-pulse" />
@@ -1041,12 +1147,13 @@ const Dashboard: React.FC<{ currentUser: User; onLogout: () => void }> = ({ curr
 
             {/* Typing Indicator */}
             {Object.keys(typingUsers).length > 0 && (
-              <TypingIndicator users={Object.values(typingUsers).map(u => u.name)} />
+              <TypingIndicator users={Object.values(typingUsers).map((u: any) => u.name)} />
             )}
           </div>
         </section>
 
-        <footer className="p-4 md:p-8 bg-slate-900/40 backdrop-blur-3xl border-t border-slate-800/50 pb-20 md:pb-8">
+        <footer className="p-4 md:p-8 bg-slate-900/40 backdrop-blur-3xl border-t border-slate-800/50 pb-20 md:pb-8 z-40">
+          {/* Modals are rendered here so they overlay properly */}
           {/* File Upload Modal */}
           {showFileUpload && (
             <div className="max-w-4xl mx-auto mb-6 bg-slate-900/80 border border-slate-800 rounded-3xl p-6">
@@ -1069,9 +1176,8 @@ const Dashboard: React.FC<{ currentUser: User; onLogout: () => void }> = ({ curr
               {selectedFiles.length > 0 && (
                 <button
                   onClick={() => {
-                    const i = inputRef.current;
-                    handleDispatch(i?.value || '', selectedFiles);
-                    if (i) i.value = '';
+                    // Send files with or without message text
+                    handleDispatch(messageText || '', selectedFiles);
                   }}
                   className="mt-4 w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-2xl transition-all flex items-center justify-center gap-2"
                 >
@@ -1103,62 +1209,89 @@ const Dashboard: React.FC<{ currentUser: User; onLogout: () => void }> = ({ curr
             </div>
           )}
 
+          {/* Reply Preview */}
+          {replyingTo && (
+            <div className="max-w-4xl mx-auto px-2">
+              <ReplyPreview replyConfig={replyingTo} onCancel={() => setReplyingTo(undefined)} />
+            </div>
+          )}
+
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              const i = e.currentTarget.elements.namedItem('msg') as HTMLInputElement;
-              if (i.value.trim() || selectedFiles.length > 0) {
-                handleDispatch(i.value, selectedFiles.length > 0 ? selectedFiles : undefined);
-                i.value = '';
+              const hasContent = messageText.trim() || selectedFiles.length > 0;
+              if (hasContent) {
+                handleDispatch(messageText, selectedFiles.length > 0 ? selectedFiles : undefined);
               }
             }}
-            className="max-w-4xl mx-auto flex gap-2 md:gap-4"
+            className="max-w-4xl mx-auto flex gap-2 md:gap-4 items-end"
           >
             <button
               type="button"
               onClick={() => setShowFileUpload(!showFileUpload)}
-              className={`p-3 md:p-6 rounded-2xl md:rounded-3xl transition-all shadow-xl ${showFileUpload
+              className={`p-3 md:p-4 rounded-2xl transition-all shadow-xl mb-1 ${showFileUpload
                 ? 'bg-blue-600 text-white'
                 : 'bg-slate-900/50 border border-slate-800 text-slate-500 hover:text-white'
                 }`}
               title="Attach files"
             >
-              <Paperclip size={20} className="md:w-7 md:h-7" />
+              <Paperclip size={20} />
             </button>
 
             <button
               type="button"
               onClick={() => setShowVoiceRecorder(!showVoiceRecorder)}
-              className={`p-3 md:p-6 rounded-2xl md:rounded-3xl transition-all shadow-xl ${showVoiceRecorder
+              className={`p-3 md:p-4 rounded-2xl transition-all shadow-xl mb-1 ${showVoiceRecorder
                 ? 'bg-red-600 text-white'
                 : 'bg-slate-900/50 border border-slate-800 text-slate-500 hover:text-white'
                 }`}
               title="Record voice message"
             >
-              <Mic size={20} className="md:w-7 md:h-7" />
+              <Mic size={20} />
             </button>
 
             <button
               type="button"
               onClick={() => setShowCameraCapture(!showCameraCapture)}
-              className={`p-3 md:p-6 rounded-2xl md:rounded-3xl transition-all shadow-xl ${showCameraCapture
+              className={`p-3 md:p-4 rounded-2xl transition-all shadow-xl mb-1 ${showCameraCapture
                 ? 'bg-green-600 text-white'
                 : 'bg-slate-900/50 border border-slate-800 text-slate-500 hover:text-white'
                 }`}
               title="Capture photo/video"
             >
-              <Camera size={20} className="md:w-7 md:h-7" />
+              <Camera size={20} />
             </button>
 
-            <div className="relative flex-1 group">
+            <div className="relative flex-1 group bg-slate-950/80 border border-slate-800 rounded-3xl flex items-center shadow-2xl">
+              {/* Emoji Button */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                  className="p-3 text-slate-500 hover:text-yellow-400 transition-colors"
+                >
+                  <Smile size={20} />
+                </button>
+                {showEmojiPicker && (
+                  <div className="absolute bottom-full mb-4 left-0 z-50">
+                    <EmojiPicker onSelect={(emoji) => {
+                      setMessageText(prev => prev + emoji);
+                      // Keep open for multiple emojis
+                    }} />
+                  </div>
+                )}
+              </div>
+
               <input
                 ref={inputRef}
                 name="msg"
                 autoComplete="off"
                 type="text"
-                className="w-full bg-slate-950/80 border border-slate-800 text-white pl-4 md:pl-6 pr-14 md:pr-20 py-3 md:py-6 rounded-2xl md:rounded-3xl focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all font-bold text-base md:text-lg placeholder-slate-700 shadow-2xl"
+                className="w-full bg-transparent border-none text-white px-2 py-4 focus:outline-none focus:ring-0 font-medium text-base placeholder-slate-600"
                 placeholder={`Message #${currentChannel?.name}...`}
+                value={messageText}
                 onChange={(e) => {
+                  setMessageText(e.target.value);
                   // Broadcast typing status
                   if (e.target.value.length > 0) {
                     mesh.broadcastTyping(activeChannelId, currentUser.uid, currentUser.displayName, true);
@@ -1171,17 +1304,16 @@ const Dashboard: React.FC<{ currentUser: User; onLogout: () => void }> = ({ curr
                   mesh.broadcastTyping(activeChannelId, currentUser.uid, currentUser.displayName, false);
                 }}
               />
-              <div className="absolute right-5 top-1/2 -translate-y-1/2 flex items-center gap-3 opacity-0 group-focus-within:opacity-100 transition-opacity">
-                <div className="text-[9px] font-mono text-slate-600 bg-slate-900 px-2 py-1 rounded-md border border-slate-800">ENTER</div>
-              </div>
             </div>
+
             <button
               type="submit"
-              className="bg-blue-600 text-white p-3 md:p-6 rounded-2xl md:rounded-3xl hover:bg-blue-500 transition-all shadow-xl shadow-blue-900/20 active:scale-90"
+              className="bg-blue-600 text-white p-3 md:p-4 rounded-2xl hover:bg-blue-500 transition-all shadow-xl shadow-blue-900/20 active:scale-90 mb-1"
             >
-              <Send size={20} className="md:w-7 md:h-7" />
+              <Send size={20} />
             </button>
           </form>
+
           <div className="max-w-4xl mx-auto mt-4 flex justify-between items-center opacity-30 text-[9px] font-black uppercase tracking-[0.3em]">
             <div className="flex gap-4">
               <span>{currentChannel?.isPrivate ? 'E2EE_ACTIVE' : 'OPEN_WAVE'}</span>

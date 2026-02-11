@@ -8,12 +8,16 @@ interface FileMessageProps {
     attachment: FileAttachment;
     onDownload?: () => void;
     isEncrypted?: boolean;
+    secret?: string;
+    channelId?: string;
 }
 
 export const FileMessage: React.FC<FileMessageProps> = ({
     attachment,
     onDownload,
-    isEncrypted = false
+    isEncrypted = false,
+    secret,
+    channelId
 }) => {
     const [showPreview, setShowPreview] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
@@ -49,14 +53,17 @@ export const FileMessage: React.FC<FileMessageProps> = ({
         }
     };
 
+    // Use url as thumbnail for images if thumbnail doesn't exist
+    const thumbnailSrc = attachment.thumbnail || (attachment.type.startsWith('image/') ? attachment.url : null);
+
     return (
         <>
             <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 max-w-sm">
                 {/* Thumbnail for images */}
-                {attachment.thumbnail && (
+                {thumbnailSrc && (
                     <div className="mb-3 relative group">
                         <img
-                            src={attachment.thumbnail}
+                            src={thumbnailSrc}
                             alt={attachment.name}
                             className="w-full h-48 object-cover rounded-xl cursor-pointer"
                             onClick={() => setShowPreview(true)}
@@ -99,14 +106,14 @@ export const FileMessage: React.FC<FileMessageProps> = ({
                     </button>
                 </div>
 
-                {/* Preview button for previewable files without thumbnail */}
-                {isPreviewable && !attachment.thumbnail && (
+                {/* Preview button for videos without thumbnail */}
+                {attachment.type.startsWith('video/') && !thumbnailSrc && (
                     <button
                         onClick={() => setShowPreview(true)}
                         className="mt-3 w-full py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm font-bold text-slate-300 transition-colors flex items-center justify-center gap-2"
                     >
                         <Eye size={16} />
-                        Preview
+                        Preview Video
                     </button>
                 )}
             </div>

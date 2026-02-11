@@ -19,6 +19,22 @@ export interface FileAttachment {
   encrypted: boolean;
 }
 
+export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read';
+
+export interface Reaction {
+  emoji: string;
+  users: string[]; // user IDs
+}
+
+export interface ReplyInfo {
+  id: string;
+  senderName: string;
+  text: string;
+  hasAttachment: boolean;
+  attachmentType?: string;
+  thumbnail?: string;
+}
+
 export interface Message {
   id: string;
   senderId: string;
@@ -27,14 +43,17 @@ export interface Message {
   timestamp: number; // Timestamp
   messageHash: string;
   channelId: string;
+  status?: MessageStatus;
   encrypted?: boolean;
   attachments?: FileAttachment[];
-  messageType?: 'text' | 'file' | 'voice' | 'image';
-  replyTo?: string; // Message ID being replied to
+  messageType?: 'text' | 'file' | 'voice' | 'image' | 'video' | 'system';
+  replyTo?: ReplyInfo;
   editedAt?: number;
   deletedAt?: number;
+  deletedFor?: string[]; // IDs of users who deleted this message
   isPinned?: boolean;
-  reactions?: Record<string, string[]>; // emoji -> user IDs
+  isForwarded?: boolean;
+  reactions?: Reaction[];
 }
 
 export interface Channel {
@@ -45,6 +64,11 @@ export interface Channel {
   participants: string[];
   lastMessage?: string;
   lastMessageTime?: number;
+  unreadCount?: number;
+  isPinned?: boolean;
+  isArchived?: boolean;
+  isMuted?: boolean;
+  typingUsers?: string[];
 }
 
 export enum CommandType {

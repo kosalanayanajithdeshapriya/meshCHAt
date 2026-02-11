@@ -1,6 +1,6 @@
 
 /**
- * Enhanced client-side encryption for BitChat using Web Crypto API.
+ * Enhanced client-side encryption for EncHAT using Web Crypto API.
  * Features: Per-channel unique salts, secure key storage, key rotation support.
  */
 
@@ -15,7 +15,7 @@ const KEY_ITERATIONS = 100000;
  */
 export async function generateChannelSalt(channelId: string): Promise<Uint8Array> {
   const enc = new TextEncoder();
-  const channelData = enc.encode(`bitchat-v2-${channelId}`);
+  const channelData = enc.encode(`enchat-v1-${channelId}`);
   const hashBuffer = await crypto.subtle.digest('SHA-256', channelData);
   return new Uint8Array(hashBuffer).slice(0, 16);
 }

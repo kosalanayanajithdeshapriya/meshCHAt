@@ -1,6 +1,6 @@
 {
-    "name": "BitChat - Decentralized Messaging",
-    "short_name": "BitChat",
+    "name": "EncHAT - Decentralized Messaging",
+    "short_name": "EncHAT",
     "description": "Peer-to-peer encrypted messaging with no servers. Direct device-to-device communication using WebRTC.",
     "start_url": "/",
     "display": "standalone",

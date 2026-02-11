@@ -1,4 +1,4 @@
-// Configuration for BitChat
+// Configuration for EncHAT
 export const config = {
     // Signaling server URL - uses environment variable or falls back to localhost
     SIGNALING_SERVER:

@@ -1,5 +1,5 @@
-// BitChat Service Worker - PWA Support
-const CACHE_NAME = 'bitchat-v1';
+// EncHAT Service Worker - PWA Support
+const CACHE_NAME = 'enchat-v1';
 const urlsToCache = [
     '/',
     '/index.html',
